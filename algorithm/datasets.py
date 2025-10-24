@@ -8,9 +8,6 @@ class NpzImageDataset(Dataset):
         self.X = X
         self.y = y.astype(int)
 
-        # determine grayscale vs RGB
-        self.is_rgb = (self.X.shape[1:] == (32, 32, 3))
-
     def __len__(self):
         return len(self.y)
 
@@ -18,6 +15,16 @@ class NpzImageDataset(Dataset):
         x = self.X[idx]
         y = self.y[idx]
 
+        # ✅ 新增：自动识别扁平化输入
+        if x.ndim == 1:
+            if x.size == 28 * 28:  # FashionMNIST
+                x = x.reshape(28, 28)
+            elif x.size == 32 * 32 * 3:  # CIFAR
+                x = x.reshape(32, 32, 3)
+            else:
+                raise ValueError(f"Unexpected flattened input size: {x.size}")
+
+        # 原始逻辑
         if x.ndim == 2:  # 28x28 grayscale -> (1, H, W)
             x = x[None, :, :].astype(np.float32) / 255.0
         elif x.ndim == 3 and x.shape[-1] == 3:  # HWC -> CHW
