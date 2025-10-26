@@ -62,6 +62,9 @@ def main():
     ap.add_argument('--weight_decay', type=float, default=1e-4)
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--q', type=float, default=0.7, help='GCE q in (0,1]')
+    # ---- new: early stopping hyperparams ----
+    ap.add_argument('--patience', type=int, default=5, help='Early stopping patience based on val loss')
+    ap.add_argument('--min_delta', type=float, default=1e-4, help='Minimum improvement on val loss to reset patience')
     args = ap.parse_args()
 
     set_seed(args.seed)
@@ -98,17 +101,36 @@ def main():
     criterion = build_loss(args.method, T_tensor=T_tensor, q=args.q)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    best_val = 0.0
+    # ---- early stopping states (monitor val_loss) ----
+    best_val_loss = float('inf')      # best (lowest) validation loss seen so far
+    best_state = None                 # best model state dict
+    epochs_no_improve = 0             # epochs since last improvement
+    patience = max(0, args.patience)  # 0 means disable early stopping
+    min_delta = float(args.min_delta)
+
     for epoch in range(1, args.epochs+1):
         tr_loss, tr_acc = one_epoch(model, tr_loader, criterion, optimizer, device)
         val_loss, val_acc = eval_epoch(model, val_loader, device)
-        print(f'Epoch {epoch:02d} | train loss {tr_loss:.4f} acc {tr_acc:.4f} | val loss {val_loss:.4f} acc {val_acc:.4f}')
-        if val_acc > best_val:
-            best_val = val_acc
-            best_state = { 'model': model.state_dict() }
+        print(f'Epoch {epoch:02d} | train loss {tr_loss:.4f} acc {tr_acc:.4f} | '
+              f'val loss {val_loss:.4f} acc {val_acc:.4f}')
 
-    # load best
-    if 'best_state' in locals():
+        # save best by val_loss (for generalization)
+        improved = (best_val_loss - val_loss) > min_delta
+        if improved:
+            best_val_loss = val_loss
+            best_state = {'model': model.state_dict()}
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        # early stopping check
+        if patience > 0 and epochs_no_improve >= patience:
+            print(f'Early stopping at epoch {epoch:02d} '
+                  f'(no val loss improvement in {patience} epochs)')
+            break
+
+    # load best model (if any)
+    if best_state is not None:
         model.load_state_dict(best_state['model'])
 
     # test
@@ -121,6 +143,7 @@ def main():
         'args': vars(args),
         'test_acc': ts_acc,
         'method': args.method,
+        'best_val_loss': best_val_loss
     }
     if T_tensor is not None:
         meta['T'] = (T_tensor.detach().cpu().numpy()).tolist()
