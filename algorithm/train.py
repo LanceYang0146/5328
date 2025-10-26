@@ -62,7 +62,7 @@ def main():
     ap.add_argument('--weight_decay', type=float, default=1e-4)
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--q', type=float, default=0.7, help='GCE q in (0,1]')
-    # ---- new: early stopping hyperparams ----
+    # ---- early stopping hyperparams ----
     ap.add_argument('--patience', type=int, default=5, help='Early stopping patience based on val loss')
     ap.add_argument('--min_delta', type=float, default=1e-4, help='Minimum improvement on val loss to reset patience')
     args = ap.parse_args()
@@ -103,6 +103,7 @@ def main():
 
     # ---- early stopping states (monitor val_loss) ----
     best_val_loss = float('inf')      # best (lowest) validation loss seen so far
+    best_val_acc  = 0.0               # ✅ track best validation accuracy
     best_state = None                 # best model state dict
     epochs_no_improve = 0             # epochs since last improvement
     patience = max(0, args.patience)  # 0 means disable early stopping
@@ -118,6 +119,7 @@ def main():
         improved = (best_val_loss - val_loss) > min_delta
         if improved:
             best_val_loss = val_loss
+            best_val_acc  = val_acc       # ✅ update best val acc along with best val loss
             best_state = {'model': model.state_dict()}
             epochs_no_improve = 0
         else:
@@ -137,16 +139,29 @@ def main():
     ts_loss, ts_acc = eval_epoch(model, ts_loader, device)
     print(f'TEST | loss {ts_loss:.4f} acc {ts_acc:.4f}')
 
+    # ---- compute RRE of T_hat if available and true T exists ----
+    T_RRE = None
+    if T_tensor is not None and args.dataset in KNOWN_T:
+        T_true = torch.tensor(KNOWN_T[args.dataset], dtype=torch.float32, device=device)
+        num = torch.norm(T_tensor - T_true, p='fro')
+        den = torch.norm(T_true, p='fro') + 1e-12
+        T_RRE = float((num / den).item())
+
     # save artifacts
     run_dir = make_run_dir()
     meta = {
         'args': vars(args),
-        'test_acc': ts_acc,
         'method': args.method,
-        'best_val_loss': best_val_loss
+        'best_val_loss': best_val_loss,
+        'best_val_acc':  best_val_acc,   # ✅ 保存验证集最佳准确率
+        'test_acc':      ts_acc,         # ✅ 测试集准确率
+        'test_loss':     ts_loss         # ✅ 测试集损失
     }
     if T_tensor is not None:
-        meta['T'] = (T_tensor.detach().cpu().numpy()).tolist()
+        meta['T'] = (T_tensor.detach().cpu().numpy()).tolist()  # ✅ 保存 T-hat
+    if T_RRE is not None:
+        meta['T_RRE'] = T_RRE                                    # ✅ 保存 T-hat-RRE
+
     with open(os.path.join(run_dir, 'result.json'), 'w') as f:
         json.dump(meta, f, indent=2)
     print('Saved run to', run_dir)
