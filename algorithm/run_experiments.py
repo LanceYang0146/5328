@@ -173,7 +173,9 @@ def main():
         "mean_val_acc": val_mean,
         "std_val_acc": val_std,
         "T_mean": T_mean,
-        "time": ts_now
+        "time": ts_now,
+        "mean_rre": rre_mean if rre_list else None,
+        "std_rre": rre_std if rre_list else None,
     }
     with open("summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
