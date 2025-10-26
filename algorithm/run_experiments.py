@@ -8,25 +8,24 @@ def list_run_dirs(root="runs"):
                if os.path.isdir(os.path.join(root, d)))
 
 def read_this_run_result(run_dir):
-    """Read fields from this run's runs/<ts>/result.json; return dict."""
     p = os.path.join(run_dir, "result.json")
     if not os.path.isfile(p):
         return {}
     try:
-        with open(p, "r") as f:
+        with open(p, "r", encoding="utf-8") as f:
             obj = json.load(f)
         return {
             "test_acc":      obj.get("test_acc", None),
             "best_val_acc":  obj.get("best_val_acc", None),
-            "T":             obj.get("T", None),       # list[list[...]]
-            "T_RRE":         obj.get("T_RRE", None),   # float
+            "T":             obj.get("T", None),
+            "T_RRE":         obj.get("T_RRE", None),
         }
     except Exception:
         return {}
 
 def append_row_tsv(tsv_path, header, row):
     need_header = not os.path.exists(tsv_path)
-    with open(tsv_path, "a", newline="") as f:
+    with open(tsv_path, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f, delimiter="\t")
         if need_header:
             w.writerow(header)
@@ -43,12 +42,11 @@ def main():
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--data_dir', type=str, default='../data')
     parser.add_argument('--python', type=str, default=sys.executable)
-    parser.add_argument('--csv', type=str, default='results.csv')  # will be TSV formatted
+    parser.add_argument('--csv', type=str, default='results.csv')
     args = parser.parse_args()
 
     seeds = [1234 + r * 7 for r in range(args.repeats)]
 
-    # Your requested header (tab separated)
     header = [
         "ts","dataset","model",
         "acc-hat","acc","acc-val-hat","acc-val","acc-clean",
@@ -58,10 +56,9 @@ def main():
     ]
 
     acc_list, val_acc_list, rre_list = [], [], []
-    That_list = []  # store each run's T for std aggregation
+    That_list = []
 
     for seed in seeds:
-        # mark runs/ before launching
         before = list_run_dirs("runs")
 
         cmd = [
@@ -91,14 +88,12 @@ def main():
             )
             continue
 
-        # read this run's result.json (authoritative)
         res = read_this_run_result(run_dir)
         test_acc     = res.get("test_acc", None)
         best_val_acc = res.get("best_val_acc", None)
-        T_hat        = res.get("T", None)      # list of lists
+        T_hat        = res.get("T", None)
         T_rre        = res.get("T_RRE", None)
 
-        # accumulate stats
         if isinstance(test_acc, (int, float)):
             acc_list.append(float(test_acc))
         if isinstance(best_val_acc, (int, float)):
@@ -108,22 +103,20 @@ def main():
         if isinstance(T_hat, list):
             That_list.append(T_hat)
 
-        # write one row (acc-hat/acc、acc-val-hat/acc-val 用相同值；acc-clean暂无则留空)
         row = [
             ts_now, args.dataset, args.method,
-            f"{test_acc:.4f}" if test_acc is not None else "",   # acc-hat
-            f"{test_acc:.4f}" if test_acc is not None else "",   # acc
-            f"{best_val_acc:.4f}" if best_val_acc is not None else "",  # acc-val-hat
-            f"{best_val_acc:.4f}" if best_val_acc is not None else "",  # acc-val
-            "",                                                   # acc-clean
-            f"{T_rre:.6f}" if T_rre is not None else "",         # T-hat-RRE
-            json.dumps(T_hat) if T_hat is not None else "",      # T-hat (json string)
-            "", "", "", "", "", "", ""                           # std columns blank for per-run rows
+            f"{test_acc:.4f}" if test_acc is not None else "",
+            f"{test_acc:.4f}" if test_acc is not None else "",
+            f"{best_val_acc:.4f}" if best_val_acc is not None else "",
+            f"{best_val_acc:.4f}" if best_val_acc is not None else "",
+            "",
+            f"{T_rre:.6f}" if T_rre is not None else "",
+            json.dumps(T_hat) if T_hat is not None else "",
+            "", "", "", "", "", "", ""
         ]
         append_row_tsv(args.csv, header, row)
         print(f"[OK] seed={seed} appended.")
 
-    # summary row with stds
     def mean_std(lst):
         if not lst:
             return 0.0, 0.0
@@ -135,7 +128,6 @@ def main():
     val_mean, val_std = mean_std(val_acc_list)
     rre_mean, rre_std = mean_std(rre_list)
 
-    # T-hat-std（把每次 T 展平，计算 Frobenius 差的均值作为 std 的一个标量近似）
     That_std_str = ""
     T_mean = None
     if That_list:
@@ -144,8 +136,8 @@ def main():
             mats = [np.array(T) for T in That_list]
             shapes = {M.shape for M in mats}
             if len(shapes) == 1:
-                A = np.stack(mats, axis=0)           # (R, C, C)
-                mu = A.mean(axis=0)                  # (C, C)
+                A = np.stack(mats, axis=0)
+                mu = A.mean(axis=0)
                 T_mean = mu.tolist()
                 diffs = A - mu
                 fro_each = np.linalg.norm(diffs.reshape(len(mats), -1), axis=1)
@@ -160,7 +152,7 @@ def main():
         f"{val_mean:.4f}", f"{val_mean:.4f}",
         "",
         f"{rre_mean:.6f}" if rre_list else "",
-        "",  # 不在汇总行放 T-hat 矩阵
+        "",
         f"{acc_std:.4f}", f"{acc_std:.4f}",
         f"{val_std:.4f}" if val_acc_list else "",
         f"{val_std:.4f}" if val_acc_list else "",
@@ -171,7 +163,6 @@ def main():
     append_row_tsv(args.csv, header, summary_row)
     print(f"[OK] summary appended → {args.csv}")
 
-    # ---- 保存 summary.json（包含 T_mean）----
     summary = {
         "dataset": args.dataset,
         "method": args.method,
@@ -181,11 +172,11 @@ def main():
         "std_acc": acc_std,
         "mean_val_acc": val_mean,
         "std_val_acc": val_std,
-        "T_mean": T_mean,   # ✅ 加入平均 T 矩阵
+        "T_mean": T_mean,
         "time": ts_now
     }
-    with open("summary.json", "w") as f:
-        json.dump(summary, f, indent=2)
+    with open("summary.json", "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
     print("[OK] summary.json saved with T_mean")
 
 if __name__ == "__main__":
