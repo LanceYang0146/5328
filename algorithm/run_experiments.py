@@ -137,6 +137,7 @@ def main():
 
     # T-hat-std（把每次 T 展平，计算 Frobenius 差的均值作为 std 的一个标量近似）
     That_std_str = ""
+    T_mean = None
     if That_list:
         try:
             import numpy as np
@@ -144,10 +145,11 @@ def main():
             shapes = {M.shape for M in mats}
             if len(shapes) == 1:
                 A = np.stack(mats, axis=0)           # (R, C, C)
-                mu = A.mean(axis=0, keepdims=True)   # (1, C, C)
-                diffs = A - mu                       # (R, C, C)
-                fro_each = np.linalg.norm(diffs.reshape(len(mats), -1), axis=1)  # (R,)
-                That_std_str = f"{fro_each.mean():.6f}"  # 一个标量化 std 指标
+                mu = A.mean(axis=0)                  # (C, C)
+                T_mean = mu.tolist()
+                diffs = A - mu
+                fro_each = np.linalg.norm(diffs.reshape(len(mats), -1), axis=1)
+                That_std_str = f"{fro_each.mean():.6f}"
         except Exception:
             That_std_str = ""
 
@@ -168,6 +170,23 @@ def main():
     ]
     append_row_tsv(args.csv, header, summary_row)
     print(f"[OK] summary appended → {args.csv}")
+
+    # ---- 保存 summary.json（包含 T_mean）----
+    summary = {
+        "dataset": args.dataset,
+        "method": args.method,
+        "repeats": len(seeds),
+        "epochs": args.epochs,
+        "mean_acc": acc_mean,
+        "std_acc": acc_std,
+        "mean_val_acc": val_mean,
+        "std_val_acc": val_std,
+        "T_mean": T_mean,   # ✅ 加入平均 T 矩阵
+        "time": ts_now
+    }
+    with open("summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    print("[OK] summary.json saved with T_mean")
 
 if __name__ == "__main__":
     main()
