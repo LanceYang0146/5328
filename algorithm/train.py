@@ -1,7 +1,7 @@
 import argparse, os, json, numpy as np, torch, torch.nn as nn, torch.optim as optim
 from datasets import get_loaders, load_npz
 from models import make_model
-from losses import ForwardCorrectedCELoss  # 只保留 forward loss
+from losses import ForwardCorrectedCELoss  
 from estimate_T import estimate_T_confident
 from utils import set_seed, accuracy, make_run_dir
 
@@ -52,7 +52,7 @@ def main():
                     choices=['FashionMNIST0.3','FashionMNIST0.6','CIFAR'])
     ap.add_argument('--data_dir', type=str, default='../data')
     ap.add_argument('--method', type=str, required=True,
-                    choices=['forward-knownT','forward-estT'])  # 删掉 gce
+                    choices=['forward-knownT','forward-estT'])  
     ap.add_argument('--epochs', type=int, default=10)
     ap.add_argument('--batch_size', type=int, default=128)
     # 优化器超参：建议 CIFAR 用 SGD+cosine
@@ -66,7 +66,7 @@ def main():
     # 估计 T 强化相关
     ap.add_argument('--warmup_epochs', type=int, default=8)   # 3 -> 8
     ap.add_argument('--topk', type=int, default=500)          # 150 -> 500
-    ap.add_argument('--tau', type=float, default=0.6,         # 概率 sharpen 温度
+    ap.add_argument('--tau', type=float, default=0.6,         
                     help='temperature for sharpening probs when estimating T')
     args = ap.parse_args()
 
