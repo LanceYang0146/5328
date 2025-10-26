@@ -1,7 +1,7 @@
 import argparse, os, json, numpy as np, torch, torch.nn as nn, torch.optim as optim
 from datasets import get_loaders, load_npz
 from models import make_model
-from losses import ForwardCorrectedCELoss  
+from losses import ForwardCorrectedCELoss, GCELoss
 from estimate_T import estimate_T_confident
 from utils import set_seed, accuracy, make_run_dir
 
@@ -15,9 +15,14 @@ KNOWN_T = {
                                  [0.3, 0.3, 0.4]], dtype=np.float32),
 }
 
-def build_loss(T_tensor):
-    assert T_tensor is not None
-    return ForwardCorrectedCELoss(T_tensor)
+def build_loss(method, T_tensor=None, q=0.7):
+    if method in ['forward-knownT', 'forward-estT']:
+        assert T_tensor is not None
+        return ForwardCorrectedCELoss(T_tensor)
+    elif method == 'gce':
+        return GCELoss(q=q)
+    else:
+        raise ValueError(method)
 
 def one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -46,13 +51,21 @@ def eval_epoch(model, loader, device):
         accs.append(accuracy(logits, y))
     return float(np.mean(losses)), float(np.mean(accs))
 
+def frobenius_relative_error(T_hat: torch.Tensor, T_true: torch.Tensor) -> float:
+    """RRE = ||T - T_hat||_F / ||T||_F"""
+    diff = T_true - T_hat
+    num = torch.linalg.norm(diff, ord='fro')
+    den = torch.linalg.norm(T_true, ord='fro')
+    return (num / (den + 1e-12)).item()
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dataset', type=str, required=True,
                     choices=['FashionMNIST0.3','FashionMNIST0.6','CIFAR'])
     ap.add_argument('--data_dir', type=str, default='../data')
     ap.add_argument('--method', type=str, required=True,
-                    choices=['forward-knownT','forward-estT'])  
+                    choices=['forward-knownT', 'forward-estT', 'gce'])
+    ap.add_argument('--q', type=float, default=0.7)
     ap.add_argument('--epochs', type=int, default=10)
     ap.add_argument('--batch_size', type=int, default=128)
     # 优化器超参：建议 CIFAR 用 SGD+cosine
@@ -66,8 +79,6 @@ def main():
     # 估计 T 强化相关
     ap.add_argument('--warmup_epochs', type=int, default=8)   # 3 -> 8
     ap.add_argument('--topk', type=int, default=500)          # 150 -> 500
-    ap.add_argument('--tau', type=float, default=0.6,         
-                    help='temperature for sharpening probs when estimating T')
     args = ap.parse_args()
 
     set_seed(args.seed)
@@ -75,13 +86,14 @@ def main():
 
     npz_path = os.path.join(args.data_dir, f'{args.dataset}.npz')
     Xtr, Str, Xts, Yts = load_npz(npz_path)
-    is_rgb = (Xts.shape[1:] == (32,32,3))
+    is_rgb = (args.dataset == 'CIFAR')
 
     tr_loader, val_loader, ts_loader = get_loaders(npz_path, seed=args.seed, batch_size=args.batch_size)
     model = make_model(is_rgb=is_rgb, num_classes=3).to(device)
 
-    # ===== 准备转移矩阵 T =====
+    # ===== 对于Forward,准备转移矩阵 T =====
     T_tensor = None
+    T_RRE = None
     if args.method == 'forward-knownT':
         T_tensor = torch.tensor(KNOWN_T[args.dataset], dtype=torch.float32, device=device)
     elif args.method == 'forward-estT':
@@ -97,13 +109,19 @@ def main():
                 loss = ce(logits, y)
                 loss.backward()
                 warmup_opt.step()
-        # ---- 估计 T：更大的 topk + 概率 sharpen + 行归一化在内部做 ----
+        # ---- 估计 T：更大的 topk  + 行归一化在内部做 ----
         T_est = estimate_T_confident(model, val_loader, device=device,
-                                     topk=args.topk, num_classes=3, temperature=args.tau)
+                                     topk=args.topk, num_classes=3)
         T_tensor = T_est.to(device)
+        #  如果是已知 T 的数据集，计算 RRE
+        if args.dataset in KNOWN_T:
+            T_true = torch.tensor(KNOWN_T[args.dataset], dtype=torch.float32, device=device)
+            T_RRE = frobenius_relative_error(T_tensor, T_true)
 
+    elif args.method == 'gce':
+        pass
     # ===== 正式训练：SGD + Cosine LR（更适合 CIFAR）=====
-    criterion = build_loss(T_tensor)
+    criterion = build_loss(args.method, T_tensor=T_tensor, q=args.q)
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
@@ -145,9 +163,12 @@ def main():
         'test_acc': ts_acc,
         'best_val_acc': best_val_acc,
         'method': args.method,
+        'seed': args.seed,
     }
-    if T_tensor is not None:
+    if args.method == 'forward-estT':          # 只在需要时保存 \hat T 和 RRE
         meta['T'] = (T_tensor.detach().cpu().numpy()).tolist()
+        if T_RRE is not None:
+            meta['T_RRE'] = float(T_RRE)
     with open(os.path.join(run_dir, 'result.json'), 'w') as f:
         json.dump(meta, f, indent=2)
     print('Saved run to', run_dir)
