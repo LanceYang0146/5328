@@ -1,15 +1,14 @@
-import argparse, subprocess, sys, json, os, statistics, time, re
+import argparse, subprocess, sys, json, os, statistics, time, re, csv
 
-# Regular expression to robustly match the "TEST | loss ... acc ..." line
+# Robust regex to match: "TEST | loss <num> acc <num>"
 TEST_LINE_RE = re.compile(r'^TEST\s*\|\s*loss\s+([0-9.]+)\s+acc\s+([0-9.]+)\s*$')
 
 def parse_test_acc_from_stdout(stdout: str):
     """
-    Parse the test accuracy from the program's standard output.
-    We scan from the end because the TEST line usually appears last.
-    Returns a float accuracy if found, otherwise None.
+    Parse test accuracy from stdout by matching the 'TEST | loss ... acc ...' line.
+    Return a float in [0,1] or None if not found.
     """
-    for line in stdout.strip().splitlines()[::-1]:
+    for line in stdout.strip().splitlines()[::-1]:  # scan from the end
         m = TEST_LINE_RE.match(line.strip())
         if m:
             try:
@@ -20,11 +19,10 @@ def parse_test_acc_from_stdout(stdout: str):
                 pass
     return None
 
-
 def latest_result_json_acc(run_dir_root="runs"):
     """
-    Fallback parser: if stdout does not contain a TEST line,
-    read the latest runs/<timestamp>/result.json and return test_acc.
+    Fallback: read the latest runs/<timestamp>/result.json and return 'test_acc'.
+    Return float in [0,1] or None if not available.
     """
     if not os.path.isdir(run_dir_root):
         return None
@@ -45,32 +43,38 @@ def latest_result_json_acc(run_dir_root="runs"):
             return None
     return None
 
+def append_row_to_csv(csv_path, header, row):
+    """
+    Append one row to CSV; create the file with header if it doesn't exist.
+    """
+    need_header = not os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        w = csv.writer(f)
+        if need_header:
+            w.writerow(header)
+        w.writerow(row)
 
 def main():
-    # ----------------- argument parser -----------------
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--dataset', required=True,
-                    choices=['FashionMNIST0.3', 'FashionMNIST0.6', 'CIFAR'])
-    ap.add_argument('--method', required=True,
-                    choices=['forward-knownT', 'forward-estT', 'gce'])
-    ap.add_argument('--repeats', type=int, default=10)
-    ap.add_argument('--epochs', type=int, default=10)
-    ap.add_argument('--data_dir', type=str, default='../data')
-    ap.add_argument('--python', type=str, default=sys.executable,
-                    help='Python executable to run train.py')
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', required=True,
+                        choices=['FashionMNIST0.3','FashionMNIST0.6','CIFAR'])
+    parser.add_argument('--method', required=True,
+                        choices=['forward-knownT','forward-estT','gce'])
+    parser.add_argument('--repeats', type=int, default=10)
+    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--data_dir', type=str, default='../data')
+    parser.add_argument('--python', type=str, default=sys.executable)
+    parser.add_argument('--csv', type=str, default='results.csv',
+                        help='Path to CSV file for appending results')
+    args = parser.parse_args()
 
-    # Sanity check: make sure we are inside the algorithm/ folder
     if not os.path.isfile('train.py'):
-        print("[WARN] train.py not found in current directory. "
-              "Please run this script inside the algorithm/ folder.")
+        print("[WARN] train.py not found in current directory. Run inside algorithm/")
 
-    # Generate deterministic seeds for each repetition
     seeds = [1234 + r * 7 for r in range(args.repeats)]
-    accs = []       # valid accuracies
-    per_run = []    # detailed record for each run
+    accs = []
+    header = ["dataset", "method", "seed", "epochs", "test_acc", "time"]
 
-    # ----------------- main experiment loop -----------------
     for seed in seeds:
         cmd = [
             args.python, 'train.py',
@@ -80,66 +84,58 @@ def main():
             '--data_dir', args.data_dir,
             '--seed', str(seed),
         ]
-        print('Running:', ' '.join(cmd))
-
-        # Capture both stdout and stderr for debugging
+        print("Running:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
 
-        # If train.py crashed, log and continue
         if result.returncode != 0:
-            print("[ERROR] Subprocess failed (non-zero exit code).")
+            print("[ERROR] Subprocess failed. Skipping this run.")
             print("stdout:\n", result.stdout)
             print("stderr:\n", result.stderr)
-            per_run.append({'seed': seed, 'acc': None, 'from': 'failed'})
             continue
 
-        # Try to parse accuracy from stdout
+        # Prefer stdout; fallback to runs/<ts>/result.json
         acc = parse_test_acc_from_stdout(result.stdout)
-
-        # Fallback: read latest runs/<timestamp>/result.json
         if acc is None:
             acc = latest_result_json_acc("runs")
-            src = 'result.json'
-        else:
-            src = 'stdout'
-
         if acc is None:
-            print("[WARN] Could not find TEST accuracy, skipping this run.")
-            per_run.append({'seed': seed, 'acc': None, 'from': 'none'})
+            print("[WARN] TEST accuracy not found. Skipping this run.")
             continue
 
         accs.append(acc)
-        per_run.append({'seed': seed, 'acc': acc, 'from': src})
-        print(f"[OK] seed={seed} acc={acc:.4f} (from {src})")
+        append_row_to_csv(
+            args.csv, header,
+            [args.dataset, args.method, seed, args.epochs, f"{acc:.4f}", time.strftime('%Y-%m-%d %H:%M:%S')]
+        )
+        print(f"[OK] seed={seed} acc={acc:.4f} -> appended to {args.csv}")
 
-    # ----------------- statistics & summary -----------------
-    valid_accs = [a for a in accs if isinstance(a, (int, float))]
-    if len(valid_accs) == 0:
-        print("[ERROR] No valid accuracy values collected.")
+    if not accs:
+        print("[ERROR] No valid accuracy collected. CSV might not include any rows.")
         return
 
-    mean = sum(valid_accs) / len(valid_accs)
-    std = statistics.pstdev(valid_accs) if len(valid_accs) > 1 else 0.0
+    mean = sum(accs) / len(accs)
+    std = statistics.pstdev(accs) if len(accs) > 1 else 0.0
+    print(f"RESULT: dataset={args.dataset} method={args.method} repeats={len(accs)} "
+          f"-> mean={mean:.4f} std={std:.4f}")
 
-    print(f'RESULT: dataset={args.dataset} method={args.method} '
-          f'repeats={args.repeats} -> mean={mean:.4f} std={std:.4f}')
+    # Save a machine-readable summary.json (optional but useful)
+    with open("summary.json", "w") as f:
+        json.dump({
+            "dataset": args.dataset,
+            "method": args.method,
+            "repeats": len(accs),
+            "epochs": args.epochs,
+            "mean": mean,
+            "std": std,
+            "accs": accs,
+            "time": time.strftime('%Y-%m-%d %H:%M:%S')
+        }, f, indent=2)
 
-    summary = {
-        'dataset': args.dataset,
-        'method': args.method,
-        'repeats': args.repeats,
-        'epochs': args.epochs,
-        'mean': mean,
-        'std': std,
-        'accs': valid_accs,
-        'runs': per_run,  # include seed & source for debugging
-        'time': time.strftime('%Y-%m-%d %H:%M:%S'),
-    }
+    # Append one final summary row to CSV (seed='ALL', test_acc='mean±std')
+    append_row_to_csv(
+        args.csv, header,
+        [args.dataset, args.method, "ALL", args.epochs, f"{mean:.4f}±{std:.4f}", time.strftime('%Y-%m-%d %H:%M:%S')]
+    )
+    print(f"[OK] Summary appended to {args.csv}")
 
-    with open('summary.json', 'w') as f:
-        json.dump(summary, f, indent=2)
-    print('Saved summary.json')
-
-# ---------------------------------------------------------
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
