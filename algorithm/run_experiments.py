@@ -45,7 +45,7 @@ def main():
     parser.add_argument('--csv', type=str, default='results.csv')
     args = parser.parse_args()
 
-    seeds = [1234 + r * 7 for r in range(args.repeats)]
+    seeds = [547 + r * 7 for r in range(args.repeats)]
 
     header = [
         "ts","dataset","model",
