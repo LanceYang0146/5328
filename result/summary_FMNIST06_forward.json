@@ -1,0 +1,14 @@
+{
+  "dataset": "FashionMNIST0.6",
+  "method": "forward-knownT",
+  "repeats": 10,
+  "epochs": 30,
+  "mean_acc": 0.9429222484429678,
+  "std_acc": 0.013375604492749415,
+  "mean_val_acc": 0.3579741379310345,
+  "std_val_acc": 0.01698856606353418,
+  "T_mean": null,
+  "time": "2025-10-27 06:44:53",
+  "mean_rre": null,
+  "std_rre": null
+}

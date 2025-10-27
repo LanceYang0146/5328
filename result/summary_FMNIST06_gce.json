@@ -1,0 +1,14 @@
+{
+  "dataset": "FashionMNIST0.6",
+  "method": "gce",
+  "repeats": 10,
+  "epochs": 30,
+  "mean_acc": 0.9240513409177462,
+  "std_acc": 0.04093334963672646,
+  "mean_val_acc": 0.3789331896551724,
+  "std_val_acc": 0.011003917586559048,
+  "T_mean": null,
+  "time": "2025-10-27 06:50:27",
+  "mean_rre": null,
+  "std_rre": null
+}

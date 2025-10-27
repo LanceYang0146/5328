@@ -1,0 +1,14 @@
+{
+  "dataset": "CIFAR",
+  "method": "gce",
+  "repeats": 10,
+  "epochs": 80,
+  "mean_acc": 0.6147646963596344,
+  "std_acc": 0.047088360832777565,
+  "mean_val_acc": 0.3554780514289936,
+  "std_val_acc": 0.014487864863080905,
+  "T_mean": null,
+  "time": "2025-10-27 07:05:44",
+  "mean_rre": null,
+  "std_rre": null
+}
