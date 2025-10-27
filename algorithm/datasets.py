@@ -3,17 +3,17 @@ from sklearn.model_selection import train_test_split
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-# ===== CIFAR 的标准化参数 =====
+# ===== CIFAR standardization parameters =====
 CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR_STD  = (0.2023, 0.1994, 0.2010)
 
 
 class NpzImageDataset(Dataset):
     """
-    支持扁平化输入，自动检测数据集类型。
-    - 对 CIFAR 启用标准化（RGB）
-    - 对 FashionMNIST 保持灰度标准化（0~1）
-    - 训练集可选数据增强
+    Supports flattened input and automatically detects dataset type.
+    - Enables standardization for CIFAR (RGB)
+    - Keeps grayscale normalization (0~1) for FashionMNIST
+    - Optional data augmentation for training set
     """
     def __init__(self, X, y, train=False, augment=False, seed=0, standardize_rgb=False):
         self.X = np.asarray(X)
@@ -28,7 +28,7 @@ class NpzImageDataset(Dataset):
 
     def _maybe_unflatten(self, x):
         if x.ndim == 1:
-            if x.size == 28*28:          # FMNIST
+            if x.size == 28*28:          # FashionMNIST
                 x = x.reshape(28, 28)
             elif x.size == 32*32*3:      # CIFAR
                 x = x.reshape(32, 32, 3)
@@ -36,9 +36,9 @@ class NpzImageDataset(Dataset):
                 raise ValueError(f"Unexpected flattened input size: {x.size}")
         return x
 
-    # ---------- 数据增强 ----------
+    # ---------- Data Augmentation ----------
     def _augment_gray(self, x):
-        # 灰度图随机水平翻转 + pad + 随机裁剪
+        # Grayscale image: random horizontal flip + padding + random crop
         if self.rng.rand() < 0.5:
             x = np.fliplr(x)
         xpad = np.pad(x, ((2, 2), (2, 2)), mode='reflect')
@@ -47,7 +47,7 @@ class NpzImageDataset(Dataset):
         return xpad[i:i + 28, j:j + 28]
 
     def _augment_rgb(self, x):
-        # RGB 图随机水平翻转 + pad + 随机裁剪
+        # RGB image: random horizontal flip + padding + random crop
         if self.rng.rand() < 0.5:
             x = np.ascontiguousarray(np.flip(x, axis=1))
         xpad = np.pad(x, ((4, 4), (4, 4), (0, 0)), mode='reflect')
@@ -59,20 +59,20 @@ class NpzImageDataset(Dataset):
         x = self._maybe_unflatten(self.X[idx])
         y = int(self.y[idx])
 
-        # ---- train 数据增强 ----
+        # ---- Apply data augmentation for training ----
         if self.augment:
             if x.ndim == 2:
                 x = self._augment_gray(x)
             elif x.ndim == 3 and x.shape[-1] == 3:
                 x = self._augment_rgb(x)
 
-        # ---- 转 float + 标准化 ----
+        # ---- Convert to float + normalization ----
         if x.ndim == 2:
             x = x.astype(np.float32) / 255.0
-            x = x[None, :, :]  # (1,H,W)
+            x = x[None, :, :]  # (1, H, W)
         elif x.ndim == 3 and x.shape[-1] == 3:
             x = x.astype(np.float32) / 255.0
-            x = np.transpose(x, (2, 0, 1))  # (C,H,W)
+            x = np.transpose(x, (2, 0, 1))  # (C, H, W)
             if self.standardize_rgb:
                 for c in range(3):
                     x[c] = (x[c] - CIFAR_MEAN[c]) / CIFAR_STD[c]
@@ -96,13 +96,13 @@ def _seed_worker(worker_id):
 
 def get_loaders(npz_path, seed=0, batch_size=128, num_workers=2):
     """
-    自动识别 CIFAR/FMNIST 数据集。
-    CIFAR -> 开启数据增强 + RGB 标准化
-    FMNIST -> 只归一化灰度
+    Automatically detects CIFAR or FashionMNIST dataset.
+    CIFAR -> enable data augmentation + RGB standardization
+    FashionMNIST -> grayscale normalization only
     """
     Xtr, Str, Xts, Yts = load_npz(npz_path)
 
-    # 判断数据类型
+    # Detect dataset type
     sample = Xtr[0]
     is_cifar = (sample.size == 32 * 32 * 3 or (sample.ndim == 3 and sample.shape[-1] == 3))
 
