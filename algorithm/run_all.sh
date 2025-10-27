@@ -41,7 +41,7 @@ set -e
 !python run_experiments.py --dataset CIFAR --method forward-estT --repeats 10 --epochs 80 --csv results.csv
 !cp summary.json /content/drive/MyDrive/5328/summary_CIFAR_forward_estT.json
 
-# (Optional) GCE baseline (no T̂ dependency, for comparison)
+# GCE baseline (no T̂ dependency, for comparison)
 !python run_experiments.py --dataset CIFAR --method gce --repeats 10 --epochs 80 --csv results.csv
 !cp summary.json /content/drive/MyDrive/5328/summary_CIFAR_gce.json
 
