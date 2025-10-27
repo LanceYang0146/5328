@@ -5,7 +5,7 @@ from losses import ForwardCorrectedCELoss, GCELoss
 from estimate_T import estimate_T_confident
 from utils import set_seed, accuracy, make_run_dir
 
-# ===== 已知转移矩阵 =====
+# ===== Known transition matrices =====
 KNOWN_T = {
     'FashionMNIST0.3': np.array([[0.7, 0.3, 0.0],
                                  [0.0, 0.7, 0.3],
@@ -68,17 +68,17 @@ def main():
     ap.add_argument('--q', type=float, default=0.7)
     ap.add_argument('--epochs', type=int, default=10)
     ap.add_argument('--batch_size', type=int, default=128)
-    # 优化器超参：建议 CIFAR 用 SGD+cosine
+    # Optimizer hyperparameters: recommended SGD+cosine for CIFAR
     ap.add_argument('--lr', type=float, default=0.1)
     ap.add_argument('--weight_decay', type=float, default=5e-4)
     ap.add_argument('--momentum', type=float, default=0.9)
     ap.add_argument('--seed', type=int, default=0)
-    # 早停
+    # Early stopping
     ap.add_argument('--patience', type=int, default=8)
     ap.add_argument('--min_delta', type=float, default=1e-4)
-    # 估计 T 强化相关
-    ap.add_argument('--warmup_epochs', type=int, default=8)   # 3 -> 8
-    ap.add_argument('--topk', type=int, default=500)          # 150 -> 500
+    # Parameters related to transition matrix estimation
+    ap.add_argument('--warmup_epochs', type=int, default=8)   # previously 3 → 8 for more stability
+    ap.add_argument('--topk', type=int, default=500)          # previously 150 → 500 for stronger estimation
     args = ap.parse_args()
 
     set_seed(args.seed)
@@ -91,13 +91,13 @@ def main():
     tr_loader, val_loader, ts_loader = get_loaders(npz_path, seed=args.seed, batch_size=args.batch_size)
     model = make_model(is_rgb=is_rgb, num_classes=3).to(device)
 
-    # ===== 对于Forward,准备转移矩阵 T =====
+    # ===== Prepare transition matrix T for forward correction =====
     T_tensor = None
     T_RRE = None
     if args.method == 'forward-knownT':
         T_tensor = torch.tensor(KNOWN_T[args.dataset], dtype=torch.float32, device=device)
     elif args.method == 'forward-estT':
-        # ---- warm-up：更长、更稳 ----
+        # ---- Warm-up phase: longer and more stable ----
         warmup_opt = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         ce = nn.CrossEntropyLoss()
         for _ in range(args.warmup_epochs):
@@ -109,18 +109,19 @@ def main():
                 loss = ce(logits, y)
                 loss.backward()
                 warmup_opt.step()
-        # ---- 估计 T：更大的 topk  + 行归一化在内部做 ----
+        # ---- Estimate T: larger top-k + row normalization inside function ----
         T_est = estimate_T_confident(model, val_loader, device=device,
                                      topk=args.topk, num_classes=3)
         T_tensor = T_est.to(device)
-        #  如果是已知 T 的数据集，计算 RRE
+        # Compute RRE if true T is known (for comparison)
         if args.dataset in KNOWN_T:
             T_true = torch.tensor(KNOWN_T[args.dataset], dtype=torch.float32, device=device)
             T_RRE = frobenius_relative_error(T_tensor, T_true)
 
     elif args.method == 'gce':
         pass
-    # ===== 正式训练：SGD + Cosine LR（更适合 CIFAR）=====
+
+    # ===== Main training: SGD + Cosine LR (works well for CIFAR) =====
     criterion = build_loss(args.method, T_tensor=T_tensor, q=args.q)
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
@@ -147,7 +148,7 @@ def main():
             epochs_no_improve += 1
 
         if args.patience > 0 and epochs_no_improve >= args.patience:
-            print(f'Early stopping at epoch {epoch:02d} (no val loss improvement in {args.patience} epochs)')
+            print(f'Early stopping at epoch {epoch:02d} (no validation loss improvement for {args.patience} epochs)')
             break
 
     if best_state is not None:
@@ -156,7 +157,7 @@ def main():
     ts_loss, ts_acc = eval_epoch(model, ts_loader, device)
     print(f'TEST | loss {ts_loss:.4f} acc {ts_acc:.4f}')
 
-    # ===== 保存结果（包含 T、best_val_acc，便于 CSV/summary 汇总）=====
+    # ===== Save results (including T, best_val_acc for CSV/summary aggregation) =====
     run_dir = make_run_dir()
     meta = {
         'args': vars(args),
@@ -165,7 +166,7 @@ def main():
         'method': args.method,
         'seed': args.seed,
     }
-    if args.method == 'forward-estT':          # 只在需要时保存 \hat T 和 RRE
+    if args.method == 'forward-estT':          # Only save estimated T̂ and RRE if applicable
         meta['T'] = (T_tensor.detach().cpu().numpy()).tolist()
         if T_RRE is not None:
             meta['T_RRE'] = float(T_RRE)
